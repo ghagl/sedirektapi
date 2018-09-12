@@ -19,45 +19,61 @@
 #
 #
 
+from http.server import BaseHTTPRequestHandler, HTTPServer
 from bs4 import BeautifulSoup
-import requests, sys
+import requests, sys, json, iisapi
 
 secret = None
 username = None
 passwd = None
 
 class dotSEIntermeditary(BaseHTTPRequestHandler):
-	def __init__(self):
-		self.api = iisapi.dotSEDirekt()
-
-	# Once the intermediary has authenticiated with .SE Direkt,
+	# When the intermediary has authenticiated with .SE Direkt,
 	# it's then expected that all following queries are legitimate.
 	# The session is automatically terminated after 15 mins of inactivity.
 	# Secure your web server (client towards the intermediary) properly!
+
+	def __init__(self, request, client_address, server):
+		self.initialized_auth = False
+		BaseHTTPRequestHandler.__init__(self, request, client_address, server)
+
 	def do_GET(self):
-		self.send_response(200)
-		self.send_header('Content-type', 'text/html')
-		self.end_headers()
+		code = 200
 		cookie = None
 		output = ''
 
-		if self.path == secret:
+		authtoken = self.path.split('/')[1]
+		print(authtoken)
+		print(secret)
+
+		if authtoken == secret:
 			# Remember this is plain HTTP and you need to be certain whether
 			# your internal network is trustworthy.
-			requests.cookies.cookiejar_from_dict(self.login(), self.api.req.cookies)
-		else if '_' in self.path:
-			query = self.path.split('_')[1].lower()
-			if query == 'login':
-				# The safest bet
-				sys.exit(-1)
-			output = iisapi.(query)()
+			if not self.initialized_auth:
+				self.initialized_auth = requests.cookies.cookiejar_from_dict(self.login())
+			query = self.path.split('/')[2]
+			if '_' in query:
+				if query.lower() == 'login':
+					# The safest bet
+					sys.exit(-1)
+				output = getattr(iisapi.dotSEDirekt(cookies=self.initialized_auth), query.split('_')[1])()
 		else:
-			# This proably only happens if the intermeditary is exposed,
+			# This proably only happens if the intermediary is exposed,
 			# or the internal network is compromised,
 			# then this is the safest bet.
 			sys.exit(-1)
 
-		self.wfile.write(output.encode('utf-8'))
+		if (len(output) == 0 and output != True) or output == False:
+			code = 500
+		else:
+			# Return answer in JSON
+			output = json.dumps(output)
+
+		self.send_response(code)
+		self.send_header('Content-type', 'text/html')
+		self.end_headers()
+		if code == 200:
+			self.wfile.write(output.encode('utf-8'))
 
 	def login(self):
 		req = requests.Session()
@@ -66,11 +82,15 @@ class dotSEIntermeditary(BaseHTTPRequestHandler):
 		xtoken = soup.find(type='hidden', name='input')['value']
 
 		return req.post('https://domanhanteraren.sedirekt.se/start/login',
-			data = {'xtoken':xtoken, 'username':username, 'password':password}).cookies.get_dict()
+			data = {'xtoken':xtoken, 'username':username, 'password':passwd}).cookies.get_dict()
 
 def create(ip):
 	server_address = (ip, 8192)
-	httpd = server_class(server_address, dotSEIntermeditary)
+	httpd = HTTPServer(server_address, dotSEIntermeditary)
+
+	global secret
+	global username
+	global passwd
 
 	# Please safeguard this file with proper ACL. chmod and the like
 	with open('dotSE.details') as f:
@@ -79,4 +99,11 @@ def create(ip):
 		username = details[1]
 		passwd = details[2]
 
+	try:
+		httpd.serve_forever()
+	except KeyboardInterrupt:
+		pass
+	httpd.server_close()
 
+if __name__ == "__main__":
+	create('127.0.0.1')

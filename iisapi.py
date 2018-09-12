@@ -22,7 +22,6 @@
 
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from bs4 import BeautifulSoup
-import intermeditary
 import requests
 
 # * Scope of dotSEDirekt: *
@@ -32,27 +31,15 @@ import requests
 # addDNSSEC(key=[please use reference given by probeDNSSEC()]) adds DNSSEC key
 # log() retrieves the domain log
 
-# Never ever use sedirektapi for directly logging in to the .SE Direkt service.
-# It should be done by an intermeditary only exposed to an internal network with proper ACL.
+# Never ever customize/use sedirektapi for directly logging in to the .SE Direkt service.
+# It should be done by an intermediary only exposed to an internal network with proper ACL.
 # The consequence of a breach affecting your password for the .SE Direkt service might be that
 # you lose access to your domain. Please instead use the intermediary features (e.g. connectIntermediary()).
 
 class dotSEDirekt:
-	# intermeditary: Internal network IP to intermediary (the intermediary should only be exposed to an internal network!)
-	# secret: Secret for communicating with the intermediary
-	def __init__(self, intermeditary, secret):
-		self.intermeditary = intermeditary
-		self.secret = secret
+	def __init__(self, cookies):
 		self.req = requests.Session()
-		self.initialized = False
-
-	def connectIntermeditary(self):
-		cookiereq = requests.get(self.intermeditary+'/{0}'.format(self.secret))
-		# OK: we should have got the cookie. We have now access to .SE Direkt.
-		requests.cookies.cookiejar_from_dict(json.loads(cookiereq.text), self.req.cookies)
-
-	def query(self, query):
-		return json.loads(requests.get(self.intermeditary+'/{0}'.format(query).text)
+		self.req.cookies = cookies
 
 	def listDomains(self):
 		list = self.req.get('https://domanhanteraren.sedirekt.se/domains')
@@ -60,11 +47,8 @@ class dotSEDirekt:
 		thelist = {}
 		for elem in domains.find_all('tbody'):
 			for link in elem.find_all('a'):
-				thelist[link.string] = link.get('href').split('=')[1]})
+				thelist[link.string] = link.get('href').split('=')[1]
 		return thelist
-
-	def removeDNSSEC(self, domainid):
-		pass
 
 	# Internal use only: retrieves xtoken from a page
 	def getXtoken(self, page):
@@ -98,12 +82,18 @@ class dotSEDirekt:
 	def removeDNSSEC(self, domainid):
 		page = 'https://domanhanteraren.sedirekt.se/domains/details/dnssec?id={0}'.format(domainid)
 		xtoken = self.getXtoken(page)
-		self.req.post(page, data = {'xtoken':xtoken, upddnskeys: 'Ta+bort+alla+publicerade+nycklar'})
+		r = self.req.post(page, data = {'xtoken':xtoken, upddnskeys: 'Ta+bort+alla+publicerade+nycklar'})
+		if r.status_code == 200:
+			return True
+		return False
 
 	def addDNSSEC(self, domainid, dnskey):
 		page = 'https://domanhanteraren.sedirekt.se/domains/details/dnssec?id={0}'.format(domainid)
 		xtoken = self.getXtoken(page)
-		self.req.post(page, data = {'xtoken':xtoken, dnskey:dnskey, upddnskeys: 'Publicera+ikryssade+nycklar'})
+		r = self.req.post(page, data = {'xtoken':xtoken, dnskey:dnskey, upddnskeys: 'Publicera+ikryssade+nycklar'})
+		if r.status_code == 200:
+			return True
+		return False
 
 	def log(self, domainid, page = 1):
 		page = self.req.get('https://domanhanteraren.sedirekt.se/domains/details/history?id={0}&page={1}'.format(domainid, page))
@@ -116,9 +106,3 @@ class dotSEDirekt:
 			tds = tr.find_all('td')
 			list.append({'type': tds[0].string, 'action':tds[1].string, 'object':tds[2].string, 'date':tds[3].string})
 		return list
-
-	def initAPI(self):
-		if self.initialized == True:
-			return
-		self.connectIntermeditary()
-		self.initialized = True
